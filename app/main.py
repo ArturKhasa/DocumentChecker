@@ -9,7 +9,6 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.types import Message, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.enums import ParseMode, ChatAction
 from aiogram.filters import CommandStart
-from aiogram.types import Document
 from file_utils import extract_text_from_docx, extract_text_from_pdf
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -47,14 +46,18 @@ async def contact_support(message: types.Message):
 @dp.message(lambda message: message.text == "📖 Инструкция")
 async def send_instruction(message: types.Message):
     instruction_text = (
-        "📌 <b>Прикрепите файл для анализа:</b>\n"
+        "📌 <b>Прикрепите или перешлите в меня файл для анализа:</b>\n"
         "Система проанализирует договор и найдет потенциальные риски для исполнителя"
     )
     await message.answer(instruction_text, parse_mode="HTML")
 
-@dp.message(F.document)
+@dp.message(F.content_type == "document")
 async def handle_document(message: Message):
-    doc: Document = message.document
+    doc = message.document
+    if not doc:
+        await message.answer("Файл не найден.")
+        return
+
     file_ext = doc.file_name.split(".")[-1].lower()
 
     if file_ext not in ["docx", "pdf"]:
