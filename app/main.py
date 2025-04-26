@@ -10,6 +10,7 @@ from aiogram.types import Message, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.enums import ParseMode, ChatAction
 from aiogram.filters import CommandStart
 from file_utils import extract_text_from_docx, extract_text_from_pdf
+from database import init_db, get_user_session, save_user_session, reset_user_session
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -25,12 +26,14 @@ button2 = KeyboardButton(text="📞 Связаться с нами")
 button3 = KeyboardButton(text="📚 Полезные материалы")
 button4 = KeyboardButton(text="📖 Инструкция")
 button5 = KeyboardButton(text="⭐ Купить подписку")
+button6 = KeyboardButton(text="🧹 Очистить историю")
 
 # Создаем клавиатуру
 keyboard = ReplyKeyboardMarkup(
-    keyboard=[[button2], [button4]],  # Кнопки передаются списком списков
+    keyboard=[[button6],[button2], [button4]],  # Кнопки передаются списком списков
     resize_keyboard=True  # Уменьшаем размер клавиатуры
 )
+
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
@@ -41,6 +44,11 @@ async def start_handler(message: Message):
 async def contact_support(message: types.Message):
     await message.answer("Вы всегда можете связаться через поддержку: @MARINA_HMA")
 
+# 🧹 Очистить историю
+@dp.message(lambda message: message.text == "🧹 Очистить историю")
+async def contact_support(message: types.Message):
+    reset_user_session(message.from_user.id)
+    await message.answer("История чата очищена ✅\nГотов принимать новые документы")
 
 # 📖 Инструкция (пример запроса)
 @dp.message(lambda message: message.text == "📖 Инструкция")
@@ -79,7 +87,7 @@ async def handle_document(message: Message):
         # Отправляем эффект "печатает..."
         await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
 
-        analysis = await analyze_contract(text)
+        analysis = await analyze_contract(message.from_user.id, text)
         htmlText = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', analysis)
         htmlText = re.sub(r'\*(.*?)\*', r'<i>\1</i>', htmlText)
         await send_long_message(message, f"📋 Рекомендации по договору:\n\n{htmlText}")
@@ -91,29 +99,45 @@ async def handle_document(message: Message):
 # Обработчик сообщений
 @dp.message()
 async def handle_message(message: Message):
-    await message.answer("Отправьте в чат документ и я дам Вам рекомендации", parse_mode="HTML")
+    text = message.text
+    user_id = message.from_user.id
 
-async def analyze_contract(text: str) -> str:
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": text}
-    ]
+    # Отправляем эффект "печатает..."
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+
+    analysis = await analyze_contract(user_id, text)
+    htmlText = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', analysis)
+    htmlText = re.sub(r'\*(.*?)\*', r'<i>\1</i>', htmlText)
+    await message.answer(htmlText, parse_mode="HTML")
+
+async def analyze_contract(user_id, text: str) -> str:
+    session = await get_user_session(user_id)
+
+    if not session:
+        session = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    session.append({"role": "user", "content": text})
 
     response = client.chat.completions.create(
         model=GPT_MODEL,
-        messages=messages,
+        messages=session,
         temperature=0.7
     )
+    reply = response.choices[0].message.content.strip()
+    session.append({"role": "assistant", "content": reply})
 
-    return response.choices[0].message.content.strip()
+    await save_user_session(user_id, session)
+    return reply
 
 async def send_long_message(message: Message, text: str, chunk_size: int = 4000):
     for i in range(0, len(text), chunk_size):
         chunk = text[i:i+chunk_size]
         await message.answer(chunk, parse_mode="HTML")
 
+
 async def main():
     logging.basicConfig(level=logging.INFO)
+    await init_db()
     await dp.start_polling(bot)
 
 
